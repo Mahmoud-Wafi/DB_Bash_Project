@@ -1,0 +1,95 @@
+#! /usr/bin/bash
+
+# Function to validate the database name argument
+function validateArgument {
+    if [ -z "$1" ]; then
+        zenity --error --text="The name field cannot be left empty"
+        return 1
+    elif [[ "$1" =~ ^[0-9] ]]; then
+        zenity --error --text="Name should not begin with a number"
+        return 1
+    elif [[ "$1" = *" "* ]]; then
+        zenity --error --text="Name shouldn't have spaces"
+        return 1
+    elif [[ "$1" =~ [^a-zA-Z0-9_] ]]; then
+        zenity --error --text="Name shouldn't have special characters."
+        return 1
+    fi
+}
+
+zenity --info --text="Hello! Welcome to your database management system."
+
+while true; do
+    command=$(zenity --list --title="Database Operations" --column="Command" "CreateDB" "ListDatabases" "ConnectToDatabases" "DropDatabase" "Exit")
+    case $command in
+    "CreateDB" )
+        flag="false"
+        while [[ $flag == "false" ]]; do
+            dirname=$(zenity --entry --title="Create Database" --text="Enter the name of the database you want to create or 0 to skip:")
+            if [ "$dirname" = "0" ]; then
+                zenity --info --text="Exiting..."
+                break
+            fi
+            validateArgument "$dirname"
+            if [ $? -eq 0 ]; then
+                
+                if [ -e "./$dirname" ]; then
+                    zenity --error --text="Database '$dirname' already exists!"
+                else
+                    flag="true"
+                    mkdir ./"$dirname"
+                    zenity --info --text="Database '$dirname' created successfully."
+                fi
+            else
+                zenity --error --text="Invalid database name. Please try again."
+            fi
+        done
+        ;;
+    "ListDatabases")
+        DBS=$(ls -l | awk '/^d/ {print $NF}')
+        if [[ $DBS ]]; then
+            zenity --info --text="Databases:\n${DBS}"
+        else
+            zenity --info --text="No databases exist."
+        fi
+        ;;
+    "ConnectToDatabases")
+        dbs=$(zenity --entry --title="Connect to Database" --text="Enter the name of the database you want to connect to:")
+        if [ -z $dbs ]; then
+            zenity --error --text="Empty input."
+        else
+            if [ -e $dbs ]; then 
+                zenity --info --text="Connected to Database '${dbs}'"
+                (./table $dbs)
+            else
+                zenity --error --text="Database doesn't exist."
+            fi
+        fi
+        ;;
+    "DropDatabase")
+        dbs=$(zenity --entry --title="Drop Database" --text="Enter the name of the database you would like to delete:")
+        if [ -z $dbs ]; then
+            zenity --error --text="Invalid input."
+        else
+            if [ -d $dbs ]; then
+                ans=$(zenity --question --title="Confirm Deletion" --text="Are you sure you want to delete $dbs database?" --ok-label="Yes" --cancel-label="No")
+                if [ $? -eq 0 ]; then
+                    rm -r ${dbs}
+                    zenity --info --text="Database $dbs has been deleted successfully."
+                else
+                    zenity --info --text="Deletion cancelled. Nothing deleted."
+                fi
+            else
+                zenity --error --text="Database doesn't exist."
+            fi
+        fi
+        ;;
+    "Exit")
+        zenity --info --text="Exiting..."
+        break
+        ;;
+    *)
+        zenity --error --text="Invalid option. Please try again."
+        ;;
+    esac
+done

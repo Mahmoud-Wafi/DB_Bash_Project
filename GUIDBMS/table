@@ -1,0 +1,574 @@
+#! /bin/bash
+
+connectedDbs=$1
+
+function validateArgument {
+    if [ -z "$1" ]; then
+        echo "The name field cannot be left empty"
+        return 1
+    elif [[ "$1" =~ ^[0-9] ]]; then
+        echo "Name should not begin with a number"
+        return 1
+    elif [[ "$1" = *" "* ]]; then
+        echo "Name shouldn't have spaces"
+        return 1
+    elif [[ "$1" =~ [^a-zA-Z0-9_] ]]; then
+        echo "Name shouldn't have special characters"
+        return 1
+    fi
+}
+
+createTable() {
+    local db_dir="$connectedDbs"
+    local tablename
+    local col_name
+    local col_type
+    local is_pk
+    local add_more
+    local pk_col
+
+    tablename=$(zenity --entry --title="Create Table" --text="Enter the name of the table:")
+
+    if [ -z "$tablename" ]; then
+        return
+    fi
+
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    if [[ ! "$tablename" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
+        zenity --error --text="Invalid table name. It should start with a letter and contain only letters, numbers, and underscores."
+        return
+    fi
+
+    if [ -e ./"$db_dir/$tablename" ]; then
+        zenity --error --text="Table already exists!"
+        return
+    fi
+
+    touch ./"$db_dir/$tablename"
+    touch ./"$db_dir/$tablename.meta"
+
+    pk_col=""
+
+    while true; do
+        col_name=$(zenity --entry --title="Create Table" --text="Enter the name of the column:")
+
+        if [ -z "$col_name" ]; then
+            zenity --error --text="Empty input.try again."
+            continue
+        fi
+
+        col_name=$(echo "$col_name" | tr ' ' '_')
+
+        if [[ ! "$col_name" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
+            zenity --error --text="Invalid column name. It should start with a letter and contain only letters, numbers, and underscores."
+            continue
+        fi
+
+        col_type=$(zenity --list --title="Create Table" --text="Select the datatype of the column:" --radiolist --column="Select" --column="Datatype" TRUE "int" FALSE "string")
+
+        if [ -z "$col_type" ]; then
+            return
+        fi
+
+        is_pk=$(zenity --list --title="Create Table" --text="Is $col_name a primary key?" --radiolist --column="Select" --column="Option" TRUE "yes" FALSE "no")
+
+        if [ -z "$is_pk" ]; then
+            return
+        fi
+
+        if [[ "$is_pk" == "yes" ]]; then
+            if [[ -n "$pk_col" ]]; then
+                zenity --error --text="A primary key already exists. Only one primary key is allowed."
+                continue
+            else
+                pk_col=$col_name
+                echo "$col_name:$col_type" >> ./"$db_dir/$tablename.meta"
+                sed -i "/primary_key/d" ./"$db_dir/$tablename.meta"
+                echo "primary_key:$pk_col" >> ./"$db_dir/$tablename.meta"
+            fi
+        else
+            echo "$col_name:$col_type" >> ./"$db_dir/$tablename.meta"
+        fi
+
+        add_more=$(zenity --list --title="Create Table" --text="Do you want to add more columns?" --radiolist --column="Select" --column="Option" TRUE "yes" FALSE "no")
+
+        if [ -z "$add_more" ]; then
+            return
+        fi
+
+        if [[ "$add_more" == "no" ]]; then
+            zenity --info --text="Table $tablename created successfully."
+            return
+        fi
+    done
+}
+
+insertIntoTable() {
+    local db_dir="$connectedDbs"
+    local tablename
+    local table_file
+    local schema_file
+    local col_names=()
+    local col_types=()
+    local pk_col
+    local data
+    local pk_value
+    local valid
+
+    tablename=$(zenity --entry --title="Insert into Table" --text="Enter the name of the table to insert into:")
+
+    if [ -z "$tablename" ]; then
+        return
+    fi
+
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    table_file="$db_dir/$tablename"
+    schema_file="$db_dir/$tablename.meta"
+
+    if [ ! -e "$table_file" ]; then
+        zenity --error --text="Table does not exist!"
+        return
+    fi
+
+    while IFS=: read -r col_name col_type; do
+        if [[ "$col_name" == primary_key* ]]; then
+            pk_col=$col_type
+        else
+            col_names+=("$col_name")
+            col_types+=("$col_type")
+        fi
+    done < "$schema_file"
+
+    while true; do
+        data=()
+        valid=true
+
+        for i in "${!col_names[@]}"; do
+            value=$(zenity --entry --title="Insert into Table" --text="Enter value for ${col_names[$i]} (${col_types[$i]}):")
+
+            if [ -z "$value" ]; then
+                return
+            fi
+
+            case "${col_types[$i]}" in
+                int)
+                    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+                        zenity --error --text="Error: Value '$value' is not a valid integer for column '${col_names[$i]}'."
+                        valid=false
+                        break
+                    fi
+                    ;;
+                string)
+                    if [[ ! "$value" =~ [a-zA-Z]* ]]; then
+                        zenity --error --text="Error: Value '$value' is not a valid string for column '${col_names[$i]}'."
+                        valid=false
+                        break
+                    fi
+                    ;;
+                *)
+                    zenity --error --text="Error: Unknown data type '${col_types[$i]}' for column '${col_names[$i]}'."
+                    valid=false
+                    break
+                    ;;
+            esac
+            data+=("$value")
+        done
+
+        if [ "$valid" = true ]; then
+            if [[ -n "$pk_col" ]]; then
+                pk_index=$(echo "${col_names[@]}" | tr ' ' '\n' | grep -n "^$pk_col$" | cut -d: -f1)
+                pk_value="${data[$((pk_index - 1))]}"
+
+                if grep -q "${pk_col}:${pk_value}" "$table_file"; then
+                    zenity --error --text="Error: Primary key value '$pk_value' already exists."
+                    continue
+                fi
+            fi
+
+            line=""
+            for i in "${!col_names[@]}"; do
+                line+="${col_names[$i]}:${data[$i]},"
+            done
+            line=${line%,}
+            echo "$line" >> "$table_file"
+
+            zenity --info --text="Data inserted successfully."
+        fi
+
+        more=$(zenity --list --title="Insert into Table" --text="Do you want to insert more rows?" --radiolist --column="Select" --column="Option" TRUE "yes" FALSE "no")
+
+        if [ -z "$more" ] || [[ "$more" == "no" ]]; then
+            return
+        fi
+    done
+}
+
+deleteFromTable() {
+    local db_dir="$connectedDbs"
+    local table_file
+    local schema_file
+    local col_names=()
+    local col_types=()
+    local pk_col
+    local value
+    local pk_value
+
+    tablename=""
+    tablename=$(zenity --entry --title="Delete from Table" --text="Enter the name of the table to delete from:")
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    table_file="$db_dir/$tablename"
+    schema_file="$db_dir/$tablename.meta"
+
+    # Check if table exists
+    if [ -z "$tablename" ]; then
+        zenity --error --text="Empty input"
+        return
+    fi
+    if [ ! -e "$table_file" ]; then
+        zenity --error --text="Table does not exist!"
+        return
+    fi
+
+    # Read schema file and determine the columns and types
+    while IFS=: read -r col_name col_type; do
+        if [[ "$col_name" =~ primary_key* ]]; then
+            pk_col="${col_type}"
+        else
+            col_names+=("$col_name")
+            col_types+=("$col_type")
+        fi
+    done < "$schema_file"  
+
+    # Display menu options
+    delete_option=$(zenity --list --title="Select Deletion Option" --column="Option" --column="Description" \
+        1 "Delete by ID (Primary Key)" \
+        2 "Delete by Column" \
+        3 "Delete All Rows")
+
+    case "$delete_option" in
+    1)
+        # Delete by ID (Primary Key)
+        if [[ -z "$pk_col" ]]; then
+            zenity --error --text="Error: No primary key defined for this table."
+            return
+        fi
+        
+        pk_value=$(zenity --entry --title="Delete by ID" --text="Enter the primary key value to delete:")
+
+        deletedRow="$pk_col:$pk_value"
+        tableFile="./$connectedDbs/$tablename"
+
+        grep "$deletedRow" "$tableFile" 
+        if [ $? == 1 ]; then
+            zenity --info --text="No matching rows found to delete."
+            return
+        fi
+
+        sed -i "/$deletedRow/d" "$tableFile"        
+        zenity --info --text="Matching rows have been deleted."
+        ;;
+    2)
+        # Delete by Column
+        column_name=$(zenity --entry --title="Delete by Column" --text="Enter the column name to filter by:")
+
+        if ! [[ " ${col_names[@]} " =~ " $column_name " ]]; then
+            zenity --error --text="Error: Column '$column_name' does not exist."
+            return
+        fi
+
+        value=$(zenity --entry --title="Delete by Column" --text="Enter the value to filter by:")
+
+        # Validate the value based on the column type
+        column_index=$(echo "${col_names[@]}" | tr ' ' '\n' | grep -n "^$column_name$" | cut -d: -f1)
+        column_index=$((column_index - 1))
+        column_type="${col_types[$column_index]}"
+
+        case "$column_type" in
+            int)
+                if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+                    zenity --error --text="Error: Value for column '$column_name' must be an integer."
+                    return
+                fi
+                ;;
+            string)
+                if [[ -z "$value" ]]; then
+                    zenity --error --text="Error: Value for column '$column_name' must not be empty."
+                    return
+                fi
+                ;;
+            *)
+                zenity --error --text="Error: Unknown data type for column '$column_name'."
+                return
+                ;;
+        esac
+
+        deletedRow="$column_name:$value"
+        tableFile="./$connectedDbs/$tablename"
+        
+        grep "$deletedRow" "$tableFile" 
+        if [ $? == 1 ]; then
+            zenity --info --text="No matching rows found to delete."
+            return
+        fi
+
+        sed -i "/$deletedRow/d" "$tableFile"        
+        zenity --info --text="Matching rows have been deleted."
+        ;;
+    3)
+        # Delete All Rows
+        > "$table_file"
+        zenity --info --text="All rows have been deleted."
+        return
+        ;;
+    *)
+        zenity --error --text="Invalid option selected."
+        return
+        ;;
+    esac
+}
+
+selectFromTable() {
+    local db_dir="$connectedDbs"
+    local tablename
+    local table_file
+    local schema_file
+    local col_names=()
+    local col_types=()
+    local pk_col
+    local value
+    local column
+    local data
+    local output
+
+    tablename=$(zenity --entry --title="Select from Table" --text="Enter the name of the table to select from:")
+
+    if [ -z "$tablename" ]; then
+        return
+    fi
+
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    table_file="$db_dir/$tablename"
+    schema_file="$db_dir/$tablename.meta"
+
+    if [ ! -e "$table_file" ]; then
+        zenity --error --text="Table does not exist!"
+        return
+    fi
+
+    if [ ! -e "$schema_file" ]; then
+        zenity --error --text="Schema file does not exist!"
+        return
+    fi
+
+    # Read schema file
+    while IFS=: read -r col_name col_type; do
+        if [[ "$col_name" == primary_key* ]]; then
+            pk_col=$col_type
+        else
+            col_names+=("$col_name")
+            col_types+=("$col_type")
+        fi
+    done < "$schema_file"
+
+    # Debugging: Print column names and types
+    echo "Column Names: ${col_names[@]}"
+    echo "Column Types: ${col_types[@]}"
+
+    select_option=$(zenity --list --title="Select from Table" --column="Select" "Select All Rows"  "Select by Column"  "Back to Main Menu")
+
+    if [ -z "$select_option" ]; then
+        return
+    fi
+
+    case "$select_option" in
+    "Select All Rows")
+        output=$(cat "$table_file")
+        if [[ -n "$output" ]]; then
+            zenity --info --text="All Rows:\n$output"
+        else
+            zenity --info --text="No data found in the table."
+        fi
+        ;;
+    "Select by Column")
+        column=$(zenity --list --title="Select by Column" --column="Column" "${col_names[@]}")
+
+        if [ -z "$column" ]; then
+            return
+        fi
+
+        value=$(zenity --entry --title="Select by Column" --text="Enter the value to select by (Column: $column):")
+
+        if [ -z "$value" ]; then
+            return
+        fi
+
+        echo "column:value $column:$value"
+        
+        output=$(grep "$column:$value" "$table_file")
+        echo "output $output"
+
+        if [[ -n "$output" ]]; then
+            zenity --info --text="Matching Rows:\n$output"
+        else
+            zenity --info --text="No matching rows found."
+        fi
+        ;;
+    "Back to Main Menu")
+        return
+        ;;
+    esac
+}
+
+dropTable() {
+    local db_dir="$connectedDbs"
+    local tablename
+
+    tablename=$(zenity --entry --title="Drop Table" --text="Enter the name of the table to drop:")
+
+    if [ -z "$tablename" ]; then
+        return
+    fi
+
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    if [ -e ./"$db_dir/$tablename" ]; then
+        rm ./"$db_dir/$tablename" ./"$db_dir/$tablename.meta"
+        zenity --info --text="Table $tablename dropped successfully."
+    else
+        zenity --error --text="Table does not exist!"
+    fi
+}
+
+listTables() {
+    local db_dir="$connectedDbs"
+    local output
+
+    #output=$(ls ./$db_dir)
+    output=$(ls "$db_dir" | grep -v '.meta')
+    if [[ $output ]]; then
+        zenity --info --text="Tables:\n$output"
+    else
+        zenity --info --text="No tables exist yet."
+    fi
+}
+
+
+updateTable() {
+    local db_dir="$connectedDbs"
+    local tablename
+    local schema_file
+    local table_file
+    local column_name
+    local old_value
+    local new_value
+    local col_names=()
+    local col_types=()
+    local pk_col
+
+    tablename=$(zenity --entry --title="Select from Table" --text="Enter the name of the table to select from:")
+
+    if [ -z "$tablename" ]; then
+        return
+    fi
+
+    tablename=$(echo "$tablename" | tr ' ' '_')
+
+    table_file="$db_dir/$tablename"
+    schema_file="$db_dir/$tablename.meta"
+
+    if [ ! -e "$table_file" ]; then
+        zenity --error --text="Table does not exist!"
+        return
+    fi
+
+    if [ ! -e "$schema_file" ]; then
+        zenity --error --text="Schema file does not exist!"
+        return
+    fi
+
+    # Read schema file
+    while IFS=: read -r col_name col_type; do
+        if [[ "$col_name" == primary_key* ]]; then
+            pk_col=$col_type
+        else
+            col_names+=("$col_name")
+            col_types+=("$col_type")
+        fi
+    done < "$schema_file"
+
+    echo "Column Names: ${col_names[@]}"
+    echo "Column Types: ${col_types[@]}"
+
+    column_name=$(zenity --entry --title="Update Table" --text="Enter the column name to update:")
+
+    if [[ ! " ${col_names[@]} " =~ " $column_name " ]]; then
+        zenity --error --text="Column $column_name does not exist."
+        return
+    fi
+
+    old_value=$(zenity --entry --title="Update Table" --text="Enter the old value to be replaced:")
+
+    if [ -z "$old_value" ]; then
+        zenity --error --text="No old value provided."
+        return
+    fi
+
+    new_value=$(zenity --entry --title="Update Table" --text="Enter the new value:")
+
+    if [ -z "$new_value" ]; then
+        zenity --error --text="No new value provided."
+        return
+    fi
+
+    # Check if the column exists in the schema
+    if grep -q "${pk_col}:${new_value}" "$table_file"; then
+        zenity --error --text="Error: Primary key value '$new_value' already exists."
+        return
+    fi
+
+    # Perform the update operation
+    if grep -q "$old_value" "$table_file"; then
+        sed -i "s/\b$old_value\b/$new_value/g" "$table_file"
+        zenity --info --text="Update operation completed successfully."
+    else
+        zenity --error --text="Old value not found in the table."
+    fi
+}
+
+while true; do
+    operation=$(zenity --list --title="Table Operations" --column="Operation" "CreateTable" "ListTables" "InsertIntoTable" "SelectFromTable" "updateTable" "DeleteFromTable" "DropTable" "Quit")
+    case $operation in
+    "CreateTable" )
+        createTable
+        ;;
+    "ListTables" )
+        listTables
+        ;;
+    "InsertIntoTable" )
+        insertIntoTable
+        ;;
+    "SelectFromTable" )
+        selectFromTable
+        ;;
+    "updateTable")
+        updateTable
+    ;;
+    "DeleteFromTable" )
+        deleteFromTable
+        ;;
+    "DropTable" )
+        dropTable
+        ;;
+    "Quit" )
+        zenity --info --text="Quit from Database..."
+        break
+        ;;
+    * )
+        zenity --error --text="Invalid option. Please try again."
+        ;;
+    esac
+done

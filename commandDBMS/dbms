@@ -1,0 +1,112 @@
+#! /usr/bin/bash
+
+# Function to validate the database name argument
+function validateArgument {
+    if [ -z "$1" ]
+    then
+        echo "The name field cannot be left empty"
+        return 1
+    elif [[ "$1" =~ ^[0-9] ]]
+    then
+        echo "Name should not begin with a number"
+        return 1
+    elif [[ "$1" = *" "* ]]
+    then
+        echo "Name Shouldn't Have Spaces"
+        return 1
+    elif [[ "$1" =~ [^a-zA-Z0-9_] ]]
+    then
+        echo "Name Shouldn't Have Special Characters"
+        return 1
+    fi
+}
+
+echo "Hello! Welcome to your database management system."
+
+# Menu to select database operations
+PS3="Enter the command number you want: "
+select command in CreateDB ListDatabases ConnectToDatabases DropDatabase Exit
+do
+case $command in
+"CreateDB" )
+        flag="false"
+        while [[ $flag == "false" ]]
+        do
+            read -p "Enter the name of the database you want to create or 0 to skip: " dirname 
+            if [ "$dirname" = "0" ]; then
+                echo "Exiting..."
+                break
+            fi
+            validateArgument "$dirname"
+            if [ $? -eq 0 ]; then
+                dirname=$(echo "$dirname" | tr ' ' '_')
+                if [ -e "./$dirname" ]; then
+                    echo "Database '$dirname' already exists!"
+                else
+                    flag="true"
+                    mkdir ./"$dirname"
+                    echo "Database '$dirname' created successfully."
+                fi
+            else
+                echo "Invalid database name. Please try again."
+            fi
+        done
+        ;;
+"ListDatabases")
+    DBS=$(ls -l | awk '/^d/ {print $NF}')
+    if [[ $DBS ]]
+    then
+        echo ${DBS}
+    else
+        echo "No databases exists."
+    fi
+    ;;
+"ConnectToDatabases")
+    read -p "Which database would you like to connect to?" dbs
+    if [ -z $dbs ]
+    then
+        echo "Empty input."
+    else
+        if [ -e $dbs ]
+        then 
+            echo "Connected to Database "${dbs}
+            (./table $dbs)
+        else
+            echo "Database doesn't exist."
+        fi
+    fi
+    ;;
+"DropDatabase")
+    while true
+    do
+        read -p "Enter the name of database you would like to delete: " dbs
+        if [ -z $dbs ]
+        then
+            echo "Invalid input."
+        else
+            break
+        fi
+    done
+    if [ -d $dbs ]
+    then
+        read -p "Are you sure you want to delete $dbs database! (y/n): " ans
+        if [ $ans == "y" ]
+        then
+            rm -r ${dbs}
+            echo "Database $dbs has been deleted sucessfully."
+        else
+            echo "Deletion cancelled. Nothing deleted."
+        fi
+    else
+        echo "Database doesn't exists."
+    fi
+    ;;
+"Exit")
+    echo "Exiting..."
+    break
+    ;;
+*)
+    echo "Invalid option. Please try again."
+    ;;
+esac
+done
